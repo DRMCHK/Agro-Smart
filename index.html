@@ -1,0 +1,1272 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgroSmart — Simulation 3D</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/aframe/1.4.2/aframe.min.js"></script>
+<script>
+/* ============================================================
+   SEEDED RNG — mulberry32-style PRNG for reproducible plants
+   ============================================================ */
+function mkRng(seed) {
+  let s = ((seed * 1664525 + 1013904223) | 0) >>> 0;
+  return () => {
+    s = (Math.imul(1664525, s) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+/* ============================================================
+   LEAF SHAPE HELPERS — ShapeGeometry via bezier curves
+   ============================================================ */
+function shapeOval(len, wid, THREE) {
+  // Round oval leaf (tomato, pepper)
+  const s = new THREE.Shape();
+  s.moveTo(0, 0);
+  s.bezierCurveTo(wid * 0.95, len * 0.1, wid * 1.08, len * 0.52, 0, len);
+  s.bezierCurveTo(-wid * 0.98, len * 0.52, -wid * 0.88, len * 0.1, 0, 0);
+  return new THREE.ShapeGeometry(s, 14);
+}
+
+function shapeStrap(len, wid, THREE) {
+  // Long narrow strap leaf (maize, rice)
+  const s = new THREE.Shape();
+  s.moveTo(0, 0);
+  s.bezierCurveTo(wid * 0.62, len * 0.04, wid * 1.02, len * 0.28, wid * 0.66, len * 0.68);
+  s.bezierCurveTo(wid * 0.32, len * 0.88, wid * 0.04, len * 0.97, 0, len);
+  s.bezierCurveTo(-wid * 0.04, len * 0.97, -wid * 0.32, len * 0.88, -wid * 0.66, len * 0.68);
+  s.bezierCurveTo(-wid * 1.02, len * 0.28, -wid * 0.62, len * 0.04, 0, 0);
+  return new THREE.ShapeGeometry(s, 16);
+}
+
+function shapeLance(len, wid, THREE) {
+  // Elongated lance leaf (mango)
+  const s = new THREE.Shape();
+  s.moveTo(0, 0);
+  s.bezierCurveTo(wid * 0.5, len * 0.04, wid * 1.12, len * 0.28, wid * 0.42, len * 0.76);
+  s.bezierCurveTo(wid * 0.14, len * 0.91, wid * 0.02, len * 0.99, 0, len);
+  s.bezierCurveTo(-wid * 0.02, len * 0.99, -wid * 0.14, len * 0.91, -wid * 0.42, len * 0.76);
+  s.bezierCurveTo(-wid * 1.12, len * 0.28, -wid * 0.5, len * 0.04, 0, 0);
+  return new THREE.ShapeGeometry(s, 16);
+}
+
+function makeTube(verts, radius, THREE, ts, rs) {
+  const curve = new THREE.CatmullRomCurve3(verts);
+  return new THREE.TubeGeometry(curve, ts || 12, radius, rs || 5, false);
+}
+
+function disposeObj(obj) {
+  obj.traverse(c => {
+    if (c.geometry) c.geometry.dispose();
+    if (c.material) {
+      if (Array.isArray(c.material)) c.material.forEach(m => m.dispose());
+      else c.material.dispose();
+    }
+  });
+}
+
+/* ============================================================
+   🌽  MAIZE  (Zea mays)
+   - Thick curved stalk with internodes
+   - Long strap leaves alternating L/R, arching outward & drooping
+   - Corn ear wrapped in husk on one side at mid-height
+   - Spray tassel at top made of curving filaments
+   ============================================================ */
+AFRAME.registerComponent('maize-plant', {
+  schema: { seed: { type: 'number', default: 1 } },
+  init() {
+    const T3 = AFRAME.THREE;
+    const rng = mkRng(this.data.seed);
+    const r = (a, b) => a + rng() * (b - a);
+    const G = new T3.Group();
+
+    const mStem = new T3.MeshLambertMaterial({ color: 0x365314 });
+    const mLeafA = new T3.MeshLambertMaterial({ color: 0x22c55e, side: T3.DoubleSide });
+    const mLeafB = new T3.MeshLambertMaterial({ color: 0x4ade80, side: T3.DoubleSide });
+    const mEar = new T3.MeshLambertMaterial({ color: 0xfbbf24 });
+    const mHusk = new T3.MeshLambertMaterial({ color: 0x4ade80, side: T3.DoubleSide });
+    const mTassel = new T3.MeshLambertMaterial({ color: 0xb45309 });
+    const H = r(1.75, 2.25);
+
+    // — Stalk (curved CatmullRom tube) —
+    const spPts = [];
+    for (let i = 0; i <= 10; i++) {
+      const t = i / 10;
+      spPts.push(new T3.Vector3(
+        Math.sin(t * r(2, 5)) * r(0, 0.038),
+        t * H,
+        Math.cos(t * r(2, 5)) * r(0, 0.032)
+      ));
+    }
+    const stalkCurve = new T3.CatmullRomCurve3(spPts);
+    G.add(new T3.Mesh(new T3.TubeGeometry(stalkCurve, 22, r(0.032, 0.048), 8, false), mStem));
+
+    // — Leaf sheaths at internodes (short collar wrapping stalk) —
+    for (let n = 0; n < 6; n++) {
+      const t = (n + 0.5) / 7;
+      const pt = stalkCurve.getPointAt(t * 0.88);
+      const sheath = new T3.Mesh(
+        new T3.CylinderGeometry(0.053, 0.055, r(0.08, 0.14), 7),
+        mStem
+      );
+      sheath.position.copy(pt);
+      G.add(sheath);
+    }
+
+    // — Strap leaves, alternating sides, drooping —
+    const nL = Math.floor(r(5, 8));
+    for (let l = 0; l < nL; l++) {
+      const t = (l + 0.5) / (nL + 1) * 0.87;
+      const pt = stalkCurve.getPointAt(t);
+      const len = r(0.44, 0.72);
+      const wid = r(0.052, 0.088);
+      const leaf = new T3.Mesh(shapeStrap(len, wid, T3), l % 2 === 0 ? mLeafA : mLeafB);
+      leaf.position.copy(pt);
+      leaf.rotation.order = 'YXZ';
+      leaf.rotation.y = (l % 2 === 0 ? 0 : Math.PI) + r(-0.38, 0.38);
+      // -PI/2 = flat horizontal; adding droop angle tilts tip downward
+      leaf.rotation.x = -(Math.PI / 2 - r(0.16, 0.44));
+      G.add(leaf);
+
+      // Midrib: thin cylinder following leaf length direction
+      const mrbDir = new T3.Vector3(
+        Math.sin(leaf.rotation.y) * Math.cos(leaf.rotation.x),
+        Math.sin(-leaf.rotation.x),
+        Math.cos(leaf.rotation.y) * Math.cos(leaf.rotation.x)
+      );
+      const mrbPts = [
+        pt.clone(),
+        pt.clone().addScaledVector(mrbDir, len * 0.5),
+        pt.clone().addScaledVector(mrbDir, len * 0.95)
+      ];
+      G.add(new T3.Mesh(makeTube(mrbPts, 0.005, T3, 8, 3),
+        new T3.MeshLambertMaterial({ color: 0x365314 })));
+    }
+
+    // — Corn ear with husk —
+    if (rng() > 0.28) {
+      const et = r(0.47, 0.63);
+      const ep = stalkCurve.getPointAt(et);
+      const eLen = r(0.17, 0.28);
+
+      // Cob (cylinder, golden yellow)
+      const cob = new T3.Mesh(new T3.CylinderGeometry(0.038, 0.052, eLen, 10), mEar);
+      cob.position.set(ep.x + 0.14, ep.y - 0.04, ep.z);
+      cob.rotation.z = r(0.22, 0.36);
+      G.add(cob);
+
+      // Husk leaves wrapping cob
+      for (let hk = 0; hk < 4; hk++) {
+        const hkGeo = shapeStrap(0.3, 0.042, T3);
+        const hk3 = new T3.Mesh(hkGeo, mHusk);
+        hk3.position.set(ep.x + 0.16, ep.y - 0.1, ep.z);
+        hk3.rotation.order = 'YXZ';
+        hk3.rotation.y = hk * (Math.PI / 2) + r(0, 0.35);
+        hk3.rotation.x = r(-0.55, -0.72);
+        hk3.rotation.z = r(0.18, 0.36);
+        G.add(hk3);
+      }
+
+      // Silk strands (thin lines from cob tip)
+      const silkMat = new T3.MeshLambertMaterial({ color: 0xfef3c7 });
+      for (let sk = 0; sk < 6; sk++) {
+        const skA = (sk / 6) * Math.PI * 2;
+        const skPts = [
+          new T3.Vector3(cob.position.x, cob.position.y + eLen * 0.44, cob.position.z),
+          new T3.Vector3(cob.position.x + Math.sin(skA) * 0.04, cob.position.y + eLen * 0.44 + 0.07, cob.position.z + Math.cos(skA) * 0.04)
+        ];
+        G.add(new T3.Mesh(makeTube(skPts, 0.003, T3, 4, 3), silkMat));
+      }
+    }
+
+    // — Tassel (branching filaments at apex) —
+    const top = stalkCurve.getPointAt(1.0);
+    // Central rod
+    const rod = new T3.Mesh(new T3.CylinderGeometry(0.006, 0.014, r(0.2, 0.34), 5), mTassel);
+    rod.position.set(top.x, top.y + r(0.1, 0.2), top.z);
+    G.add(rod);
+    // Curved filaments
+    for (let f = 0; f < Math.floor(r(10, 18)); f++) {
+      const fa = (f / 16) * Math.PI * 2 + r(-0.15, 0.15);
+      const fl = r(0.1, 0.26);
+      const sy = top.y + r(0.06, 0.32);
+      const filPts = [
+        new T3.Vector3(top.x, sy, top.z),
+        new T3.Vector3(top.x + Math.sin(fa) * fl * 0.5, sy + fl * 0.22, top.z + Math.cos(fa) * fl * 0.5),
+        new T3.Vector3(top.x + Math.sin(fa) * fl, sy - fl * 0.24, top.z + Math.cos(fa) * fl)
+      ];
+      G.add(new T3.Mesh(makeTube(filPts, 0.0032, T3, 6, 3), mTassel));
+    }
+
+    this.el.setObject3D('plant', G);
+  },
+  remove() {
+    const o = this.el.getObject3D('plant');
+    if (o) { disposeObj(o); this.el.removeObject3D('plant'); }
+  }
+});
+
+/* ============================================================
+   🍅  TOMATO  (Solanum lycopersicum)
+   - Bamboo stake beside main stem with string ties
+   - Fuzzy curved main stem + 3 lateral branches
+   - Pinnate compound leaves (rachis + oval leaflets pairs)
+   - Round fruits in clusters, ripeness gradient green→orange→red
+   ============================================================ */
+AFRAME.registerComponent('tomato-plant', {
+  schema: { seed: { type: 'number', default: 1 } },
+  init() {
+    const T3 = AFRAME.THREE;
+    const rng = mkRng(this.data.seed);
+    const r = (a, b) => a + rng() * (b - a);
+    const G = new T3.Group();
+
+    const mStem = new T3.MeshLambertMaterial({ color: 0x166534 });
+    const mLeaf = new T3.MeshLambertMaterial({ color: 0x16a34a, side: T3.DoubleSide });
+    const mLeafD = new T3.MeshLambertMaterial({ color: 0x14532d, side: T3.DoubleSide });
+    const mStake = new T3.MeshLambertMaterial({ color: 0x92400e });
+    const mTie = new T3.MeshLambertMaterial({ color: 0xd97706 });
+    const fruitMats = [
+      new T3.MeshLambertMaterial({ color: 0xdc2626 }),
+      new T3.MeshLambertMaterial({ color: 0xf97316 }),
+      new T3.MeshLambertMaterial({ color: 0x84cc16 })
+    ];
+    const mCalyx = new T3.MeshLambertMaterial({ color: 0x15803d });
+    const H = r(0.88, 1.24);
+
+    // — Bamboo stake —
+    G.add(Object.assign(
+      new T3.Mesh(new T3.CylinderGeometry(0.018, 0.024, H + 0.3, 6), mStake),
+      { position: new T3.Vector3(0.13, (H + 0.3) / 2, 0) }
+    ));
+    // String ties (torus)
+    for (let t = 0; t < 3; t++) {
+      const tie = new T3.Mesh(new T3.TorusGeometry(0.085, 0.006, 5, 8), mTie);
+      tie.position.set(0.065, H * (0.24 + t * 0.32), 0);
+      tie.rotation.x = Math.PI / 2;
+      G.add(tie);
+    }
+
+    // — Main stem —
+    const msPts = [];
+    for (let i = 0; i <= 6; i++) {
+      const t = i / 6;
+      msPts.push(new T3.Vector3(r(-0.02, 0.02) * t, t * H, r(-0.02, 0.02) * t));
+    }
+    const msCurve = new T3.CatmullRomCurve3(msPts);
+    G.add(new T3.Mesh(new T3.TubeGeometry(msCurve, 14, 0.032, 7, false), mStem));
+
+    // — Helper: Pinnate compound leaf from a given base position —
+    const addCompoundLeaf = (base, dirY, droop) => {
+      const rachisLen = r(0.14, 0.24);
+      const rachisEnd = new T3.Vector3(
+        base.x + Math.sin(dirY) * rachisLen,
+        base.y - rachisLen * 0.1,
+        base.z + Math.cos(dirY) * rachisLen
+      );
+      const rachisMid = new T3.Vector3(
+        (base.x + rachisEnd.x) / 2,
+        (base.y + rachisEnd.y) / 2 + 0.02,
+        (base.z + rachisEnd.z) / 2
+      );
+      // Rachis tube
+      G.add(new T3.Mesh(
+        makeTube([base, rachisMid, rachisEnd], 0.007, T3, 8, 4), mStem
+      ));
+      // Leaflet pairs along rachis
+      const nPairs = Math.floor(r(2, 4));
+      for (let p = 0; p < nPairs; p++) {
+        const pt = (p + 0.5) / nPairs;
+        const lBase = new T3.Vector3(
+          base.x + Math.sin(dirY) * rachisLen * pt,
+          base.y - rachisLen * 0.1 * pt,
+          base.z + Math.cos(dirY) * rachisLen * pt
+        );
+        for (const side of [-1, 1]) {
+          const ll = r(0.055, 0.09), lw = r(0.03, 0.048);
+          const lf = new T3.Mesh(shapeOval(ll, lw, T3), p % 2 === 0 ? mLeaf : mLeafD);
+          lf.position.copy(lBase);
+          lf.rotation.order = 'YXZ';
+          lf.rotation.y = dirY + side * (Math.PI / 2 + r(-0.15, 0.15));
+          lf.rotation.x = r(-0.25, -0.52);
+          G.add(lf);
+        }
+      }
+      // Terminal leaflet (larger)
+      const tlf = new T3.Mesh(shapeOval(r(0.07, 0.11), r(0.038, 0.058), T3), mLeaf);
+      tlf.position.copy(rachisEnd);
+      tlf.rotation.y = dirY + r(-0.2, 0.2);
+      tlf.rotation.x = r(-0.22, -0.45);
+      G.add(tlf);
+    };
+
+    // — Attach compound leaves along stem —
+    [0.2, 0.4, 0.6, 0.78, 0.92].forEach(t => {
+      const pt = msCurve.getPointAt(t);
+      addCompoundLeaf(pt, r(0, Math.PI * 2), r(-0.15, -0.45));
+    });
+
+    // — Fruit clusters at branch zones —
+    const addFruitCluster = (center) => {
+      const n = Math.floor(r(1, 4));
+      for (let f = 0; f < n; f++) {
+        const fa = rng() * Math.PI * 2, fd = r(0.04, 0.09);
+        const rad = r(0.042, 0.076);
+        const ri = Math.floor(rng() * 3);
+        const fr = new T3.Mesh(new T3.SphereGeometry(rad, 9, 7), fruitMats[ri]);
+        fr.position.set(center.x + Math.sin(fa) * fd, center.y + r(-0.06, 0.05), center.z + Math.cos(fa) * fd);
+        G.add(fr);
+        // Calyx star
+        const cx = new T3.Mesh(new T3.SphereGeometry(rad * 0.36, 5, 4), mCalyx);
+        cx.scale.y = 0.35;
+        cx.position.set(fr.position.x, fr.position.y + rad * 0.82, fr.position.z);
+        G.add(cx);
+        // Fruit stem
+        const fsPts = [
+          center.clone(),
+          fr.position.clone().add(new T3.Vector3(0, rad * 1.2, 0))
+        ];
+        G.add(new T3.Mesh(makeTube(fsPts, 0.004, T3, 4, 3), mStem));
+      }
+    };
+    [0.42, 0.62, 0.82].forEach(t => {
+      if (rng() > 0.28) addFruitCluster(msCurve.getPointAt(t));
+    });
+
+    // — Lateral branches —
+    [0.35, 0.6].forEach((t, i) => {
+      const bp = msCurve.getPointAt(t);
+      const bAngle = rng() * Math.PI * 2;
+      const bLen = r(0.2, 0.36);
+      const bEnd = new T3.Vector3(
+        bp.x + Math.sin(bAngle) * bLen, bp.y + r(0.04, 0.12), bp.z + Math.cos(bAngle) * bLen
+      );
+      G.add(new T3.Mesh(makeTube([bp, bEnd], 0.018, T3, 8, 5), mStem));
+      addCompoundLeaf(bEnd, bAngle, -0.35);
+      if (rng() > 0.4) addFruitCluster(bEnd);
+    });
+
+    this.el.setObject3D('plant', G);
+  },
+  remove() {
+    const o = this.el.getObject3D('plant');
+    if (o) { disposeObj(o); this.el.removeObject3D('plant'); }
+  }
+});
+
+/* ============================================================
+   🌾  RICE  (Oryza sativa)
+   - 5-8 thin tillers per hill, each leaning slightly outward
+   - Narrow grass blades on each tiller, very thin strap shape
+   - Drooping panicle (nodding grain head) at tiller apex
+   - Grain spikelets as small elongated spheres along panicle
+   - Shallow water puddle around base (paddy field simulation)
+   ============================================================ */
+AFRAME.registerComponent('rice-plant', {
+  schema: { seed: { type: 'number', default: 1 } },
+  init() {
+    const T3 = AFRAME.THREE;
+    const rng = mkRng(this.data.seed);
+    const r = (a, b) => a + rng() * (b - a);
+    const G = new T3.Group();
+
+    const ripe = rng() > 0.48;
+    const mCulm = new T3.MeshLambertMaterial({ color: 0xa3e635 });
+    const mBlade = new T3.MeshLambertMaterial({ color: 0x84cc16, side: T3.DoubleSide });
+    const mPanicle = new T3.MeshLambertMaterial({ color: ripe ? 0xa16207 : 0x84cc16 });
+    const mGrain = new T3.MeshLambertMaterial({ color: ripe ? 0xca8a04 : 0xbef264 });
+    const mWater = new T3.MeshLambertMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.3 });
+
+    // — Flooded paddy water —
+    const puddle = new T3.Mesh(new T3.CircleGeometry(r(0.28, 0.42), 9), mWater);
+    puddle.rotation.x = -Math.PI / 2;
+    puddle.position.y = 0.006;
+    G.add(puddle);
+
+    // — Tillers —
+    const nT = Math.floor(r(5, 9));
+    for (let ti = 0; ti < nT; ti++) {
+      const ang = (ti / nT) * Math.PI * 2 + r(-0.28, 0.28);
+      const spr = r(0.02, 0.11);
+      const tH = r(0.65, 0.96);
+      const lean = r(0.06, 0.18);
+
+      // Culm (tiller stem) with slight outward lean
+      const cPts = [
+        new T3.Vector3(Math.sin(ang) * spr, 0, Math.cos(ang) * spr),
+        new T3.Vector3(Math.sin(ang) * (spr + lean * 0.5), tH * 0.5, Math.cos(ang) * (spr + lean * 0.5)),
+        new T3.Vector3(Math.sin(ang) * (spr + lean), tH, Math.cos(ang) * (spr + lean))
+      ];
+      const cCurve = new T3.CatmullRomCurve3(cPts);
+      G.add(new T3.Mesh(new T3.TubeGeometry(cCurve, 10, 0.011, 5, false), mCulm));
+
+      // — Narrow grass blades —
+      const nB = Math.floor(r(2, 4));
+      for (let b = 0; b < nB; b++) {
+        const bt = (b + 0.5) / nB * 0.72;
+        const bPt = cCurve.getPointAt(bt);
+        const bLen = r(0.26, 0.5);
+        const bWid = r(0.01, 0.019);
+        const blade = new T3.Mesh(shapeStrap(bLen, bWid, T3), mBlade);
+        blade.position.copy(bPt);
+        blade.rotation.order = 'YXZ';
+        blade.rotation.y = ang + (b % 2 === 0 ? 0 : Math.PI) + r(-0.5, 0.5);
+        blade.rotation.x = -(Math.PI / 2 - r(0.12, 0.36));
+        G.add(blade);
+      }
+
+      // — Panicle at apex —
+      const topPt = cCurve.getPointAt(1.0);
+      const pLen = r(0.14, 0.26);
+      const droop = r(0.38, 0.85);
+      const pDir = ang + r(-0.35, 0.35);
+      const pPts = [
+        topPt.clone(),
+        new T3.Vector3(topPt.x + Math.sin(pDir) * pLen * 0.42, topPt.y + pLen * (0.48 - droop * 0.28), topPt.z + Math.cos(pDir) * pLen * 0.42),
+        new T3.Vector3(topPt.x + Math.sin(pDir) * pLen * 0.9, topPt.y - pLen * droop, topPt.z + Math.cos(pDir) * pLen * 0.9)
+      ];
+      const pCurve = new T3.CatmullRomCurve3(pPts);
+      G.add(new T3.Mesh(new T3.TubeGeometry(pCurve, 8, 0.008, 4, false), mPanicle));
+
+      // Grain spikelets on panicle
+      for (let gn = 0; gn < Math.floor(r(5, 11)); gn++) {
+        const gt = rng();
+        const gPt = pCurve.getPointAt(gt);
+        const grain = new T3.Mesh(new T3.SphereGeometry(r(0.007, 0.013), 5, 4), mGrain);
+        grain.scale.y = r(1.6, 2.8);
+        grain.position.set(gPt.x + r(-0.018, 0.018), gPt.y, gPt.z + r(-0.018, 0.018));
+        G.add(grain);
+      }
+    }
+
+    this.el.setObject3D('plant', G);
+  },
+  remove() {
+    const o = this.el.getObject3D('plant');
+    if (o) { disposeObj(o); this.el.removeObject3D('plant'); }
+  }
+});
+
+/* ============================================================
+   🥭  MANGO TREE  (Mangifera indica)
+   - Thick bark-textured trunk with surface ridges
+   - 3-5 main branches spreading upward and outward
+   - Sub-branches with dense clusters of lance-shaped leaves
+   - New growth leaves are orange-red (characteristic of mango!)
+   - Oval mango fruits hanging from sub-branches on long stems
+   ============================================================ */
+AFRAME.registerComponent('mango-tree', {
+  schema: { seed: { type: 'number', default: 1 } },
+  init() {
+    const T3 = AFRAME.THREE;
+    const rng = mkRng(this.data.seed);
+    const r = (a, b) => a + rng() * (b - a);
+    const G = new T3.Group();
+
+    const mTrunk = new T3.MeshLambertMaterial({ color: 0x7c2d12 });
+    const mBark = new T3.MeshLambertMaterial({ color: 0x5c1a08 });
+    const mLeafMat = [
+      new T3.MeshLambertMaterial({ color: 0x14532d, side: T3.DoubleSide }),
+      new T3.MeshLambertMaterial({ color: 0x166534, side: T3.DoubleSide }),
+      new T3.MeshLambertMaterial({ color: 0xf97316, side: T3.DoubleSide }) // young flush - orange!
+    ];
+    const mFruitMat = [
+      new T3.MeshLambertMaterial({ color: 0xf59e0b }),
+      new T3.MeshLambertMaterial({ color: 0xf97316 }),
+      new T3.MeshLambertMaterial({ color: 0x84cc16 })
+    ];
+
+    const tH = r(2.0, 2.8);
+    const tR = r(0.14, 0.22);
+
+    // — Trunk —
+    const tPts = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      tPts.push(new T3.Vector3(Math.sin(t * 2.1) * r(0, 0.05), t * tH, Math.cos(t * 1.8) * r(0, 0.04)));
+    }
+    const tCurve = new T3.CatmullRomCurve3(tPts);
+    // Tapered: simulate taper with two segments
+    G.add(new T3.Mesh(new T3.TubeGeometry(tCurve, 18, tR, 10, false), mTrunk));
+
+    // Bark ridges
+    for (let ri = 0; ri < 6; ri++) {
+      const rPt = tCurve.getPointAt(ri / 5 * 0.92);
+      const ridge = new T3.Mesh(new T3.TorusGeometry(tR * 1.06, 0.012, 6, 11), mBark);
+      ridge.position.copy(rPt);
+      ridge.rotation.x = Math.PI / 2;
+      G.add(ridge);
+    }
+
+    // — Leaf cluster helper —
+    const addLeafCluster = (center, nLeaves, scale) => {
+      const sc = scale || 1;
+      for (let l = 0; l < nLeaves; l++) {
+        const la = rng() * Math.PI * 2;
+        const ld = r(0.06, 0.28) * sc;
+        const lLen = r(0.14, 0.26) * sc;
+        const lWid = r(0.024, 0.042) * sc;
+        const lPos = new T3.Vector3(
+          center.x + Math.sin(la) * ld,
+          center.y + r(-0.08, 0.14) * sc,
+          center.z + Math.cos(la) * ld
+        );
+        const mi = l < 2 ? 2 : (l % 2 === 0 ? 0 : 1); // first 2 are young (orange)
+        const lf = new T3.Mesh(shapeLance(lLen, lWid, T3), mLeafMat[mi]);
+        lf.position.copy(lPos);
+        lf.rotation.order = 'YXZ';
+        lf.rotation.y = la + r(-0.3, 0.3);
+        lf.rotation.x = r(-0.18, -0.62);
+        G.add(lf);
+      }
+    };
+
+    // — Mango fruit helper —
+    const addMango = (from, to) => {
+      const fLen = r(0.08, 0.18);
+      const fPos = to.clone().add(new T3.Vector3(r(-0.1, 0.1), -r(0.12, 0.28), r(-0.1, 0.1)));
+      const mango = new T3.Mesh(new T3.SphereGeometry(fLen, 9, 7), mFruitMat[Math.floor(rng() * 3)]);
+      mango.scale.set(r(0.7, 0.88), r(1.3, 1.65), r(0.75, 0.92));
+      mango.position.copy(fPos);
+      G.add(mango);
+      // Hanging stem
+      G.add(new T3.Mesh(
+        makeTube([to.clone(), fPos.clone().add(new T3.Vector3(0, fLen * 1.2, 0))], 0.007, T3, 5, 3),
+        mBark
+      ));
+    };
+
+    // — Main branches —
+    const trunkTop = tCurve.getPointAt(1.0);
+    const nBranch = Math.floor(r(3, 5));
+    for (let b = 0; b < nBranch; b++) {
+      const bAngle = (b / nBranch) * Math.PI * 2 + r(-0.25, 0.25);
+      const bTilt = r(0.28, 0.58);
+      const bLen = r(0.72, 1.28);
+
+      const bStart = tCurve.getPointAt(r(0.75, 0.94));
+      const bDir = new T3.Vector3(Math.sin(bAngle) * Math.sin(bTilt), Math.cos(bTilt), Math.cos(bAngle) * Math.sin(bTilt));
+      const bEnd = bStart.clone().addScaledVector(bDir, bLen);
+      const bMid = bStart.clone().add(bEnd).multiplyScalar(0.5);
+      bMid.y += r(0.05, 0.18);
+
+      G.add(new T3.Mesh(
+        makeTube([bStart, bMid, bEnd], r(0.048, 0.082), T3, 10, 7),
+        mTrunk
+      ));
+
+      // — Sub-branches from main branch end —
+      const nSub = Math.floor(r(2, 4));
+      for (let s = 0; s < nSub; s++) {
+        const sAngle = bAngle + r(-0.95, 0.95);
+        const sTilt = r(0.28, 0.68);
+        const sLen = r(0.32, 0.72);
+        const sDir = new T3.Vector3(Math.sin(sAngle) * Math.sin(sTilt), Math.cos(sTilt) * 0.7, Math.cos(sAngle) * Math.sin(sTilt));
+        const sEnd = bEnd.clone().addScaledVector(sDir, sLen);
+        const sMid = bEnd.clone().add(sEnd).multiplyScalar(0.5);
+        sMid.y += r(0.03, 0.1);
+
+        G.add(new T3.Mesh(
+          makeTube([bEnd, sMid, sEnd], r(0.026, 0.048), T3, 8, 6),
+          mTrunk
+        ));
+
+        // Leaf cluster
+        addLeafCluster(sEnd, Math.floor(r(6, 14)));
+
+        // Mangoes
+        if (rng() > 0.48) addMango(sEnd, sEnd);
+        if (rng() > 0.68) addMango(sEnd, sEnd);
+      }
+
+      addLeafCluster(bEnd, Math.floor(r(4, 8)), 0.8);
+    }
+
+    // Leaf litter on ground
+    const mLitter = new T3.MeshLambertMaterial({ color: 0x854d0e, transparent: true, opacity: 0.8 });
+    for (let l = 0; l < 5; l++) {
+      const la = rng() * Math.PI * 2, ld = r(0.3, 1.2);
+      const litter = new T3.Mesh(shapeLance(r(0.12, 0.2), r(0.018, 0.028), T3), mLitter);
+      litter.position.set(Math.sin(la) * ld, 0.018, Math.cos(la) * ld);
+      litter.rotation.x = -Math.PI / 2 + r(-0.1, 0.1);
+      litter.rotation.z = rng() * Math.PI * 2;
+      G.add(litter);
+    }
+
+    this.el.setObject3D('plant', G);
+  },
+  remove() {
+    const o = this.el.getObject3D('plant');
+    if (o) { disposeObj(o); this.el.removeObject3D('plant'); }
+  }
+});
+
+/* ============================================================
+   🌶️  PEPPER  (Capsicum annuum)
+   - Woody short main stem, repeated Y-junction branching
+   - Dense oval pointed leaves, dark green, in opposite pairs
+   - Long pendant fruits (elongated shape), multi-colour ripeness
+   - Star-shaped calyx at fruit base (characteristic)
+   ============================================================ */
+AFRAME.registerComponent('pepper-plant', {
+  schema: { seed: { type: 'number', default: 1 } },
+  init() {
+    const T3 = AFRAME.THREE;
+    const rng = mkRng(this.data.seed);
+    const r = (a, b) => a + rng() * (b - a);
+    const G = new T3.Group();
+
+    const mStem = new T3.MeshLambertMaterial({ color: 0x365314 });
+    const mWood = new T3.MeshLambertMaterial({ color: 0x5c3317 });
+    const mLeafA = new T3.MeshLambertMaterial({ color: 0x15803d, side: T3.DoubleSide });
+    const mLeafB = new T3.MeshLambertMaterial({ color: 0x14532d, side: T3.DoubleSide });
+    const mCalyx = new T3.MeshLambertMaterial({ color: 0x15803d });
+    const pepperColors = [0xdc2626, 0xea580c, 0xf59e0b, 0x84cc16, 0xdc2626];
+    const mPepper = pepperColors.map(c => new T3.MeshLambertMaterial({ color: c }));
+
+    const H = r(0.48, 0.78);
+
+    // — Recursive Y-junction branch builder —
+    const addBranch = (start, dir, rad, depth, len) => {
+      if (depth > 3 || rad < 0.006) return;
+
+      const end = start.clone().addScaledVector(dir, len);
+      const mid = start.clone().add(end).multiplyScalar(0.5);
+      mid.x += r(-0.015, 0.015);
+      mid.z += r(-0.015, 0.015);
+
+      // Branch tube
+      const bMat = depth === 0 ? mWood : mStem;
+      G.add(new T3.Mesh(makeTube([start, mid, end], rad, T3, 8, 5), bMat));
+
+      // Opposite leaf pair at this node
+      const leafDirA = rng() * Math.PI * 2;
+      for (const side of [0, Math.PI]) {
+        const lLen = r(0.055, 0.1);
+        const lWid = r(0.032, 0.056);
+        const lf = new T3.Mesh(shapeOval(lLen, lWid, T3), rng() > 0.5 ? mLeafA : mLeafB);
+        lf.position.copy(end);
+        lf.rotation.order = 'YXZ';
+        lf.rotation.y = leafDirA + side + r(-0.18, 0.18);
+        lf.rotation.x = r(-0.2, -0.58);
+        G.add(lf);
+      }
+
+      // Pepper fruit at this branching node (depth >= 1)
+      if (depth >= 1 && rng() > 0.42) {
+        const pLen = r(0.055, 0.11);
+        const pRad = r(0.01, 0.016);
+        const pMat = mPepper[Math.floor(rng() * mPepper.length)];
+
+        // Elongated fruit body
+        const pepper = new T3.Mesh(new T3.SphereGeometry(pRad, 7, 5), pMat);
+        pepper.scale.y = r(3.2, 5.5); // elongate into chili shape
+        pepper.scale.x = r(0.55, 0.82);
+        pepper.scale.z = r(0.55, 0.82);
+        const pAngle = rng() * Math.PI * 2;
+        pepper.position.set(
+          end.x + Math.sin(pAngle) * 0.04,
+          end.y - r(0.04, 0.09),
+          end.z + Math.cos(pAngle) * 0.04
+        );
+        pepper.rotation.x = r(-0.15, 0.62); // mostly pendant but some upright
+        pepper.rotation.z = r(-0.3, 0.3);
+        G.add(pepper);
+
+        // Calyx at fruit top
+        const cx = new T3.Mesh(new T3.SphereGeometry(pRad * 1.4, 5, 4), mCalyx);
+        cx.scale.y = 0.4;
+        cx.position.set(pepper.position.x, pepper.position.y + pRad * 0.9, pepper.position.z);
+        G.add(cx);
+
+        // Fruit stem
+        G.add(new T3.Mesh(
+          makeTube([end.clone(), pepper.position.clone().add(new T3.Vector3(0, pRad * 1.5, 0))], 0.004, T3, 4, 3),
+          mStem
+        ));
+      }
+
+      // Y-junction: 2 sub-branches
+      if (depth < 3) {
+        const nSub = Math.floor(r(2, 3));
+        for (let s = 0; s < nSub; s++) {
+          const spread = r(0.28, 0.62);
+          const subAngle = (s / nSub) * Math.PI * 2 + r(-0.4, 0.4);
+          const subDir = new T3.Vector3(
+            dir.x * 0.7 + Math.sin(subAngle) * spread,
+            dir.y,
+            dir.z * 0.7 + Math.cos(subAngle) * spread
+          ).normalize();
+          addBranch(end, subDir, rad * r(0.64, 0.72), depth + 1, len * r(0.58, 0.72));
+        }
+      }
+    };
+
+    // Start main stem
+    addBranch(
+      new T3.Vector3(0, 0, 0),
+      new T3.Vector3(r(-0.08, 0.08), 1, r(-0.08, 0.08)).normalize(),
+      r(0.028, 0.042),
+      0,
+      H
+    );
+
+    this.el.setObject3D('plant', G);
+  },
+  remove() {
+    const o = this.el.getObject3D('plant');
+    if (o) { disposeObj(o); this.el.removeObject3D('plant'); }
+  }
+});
+</script>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Space Grotesk',sans-serif;background:#0a1a0a;overflow:hidden}
+#ui{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:100}
+#hdr{position:fixed;top:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:13px 20px;background:linear-gradient(to bottom,rgba(0,0,0,0.9),transparent);pointer-events:auto}
+.logo{display:flex;align-items:center;gap:10px}
+.li{width:32px;height:32px;background:#22c55e;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.lt{font-size:17px;font-weight:600;color:#fff;letter-spacing:-0.02em}
+.ls{font-size:10px;color:#86efac;letter-spacing:0.07em;text-transform:uppercase}
+.lbdg{display:flex;align-items:center;gap:6px;background:rgba(239,68,68,0.14);border:1px solid rgba(239,68,68,0.38);padding:5px 12px;border-radius:999px}
+.ldot{width:7px;height:7px;background:#ef4444;border-radius:50%;animation:bl 1.2s infinite}
+@keyframes bl{0%,100%{opacity:1}50%{opacity:0.18}}
+.ltxt{font-size:11px;color:#fca5a5;font-weight:500;letter-spacing:0.1em}
+#lp{position:fixed;top:68px;left:13px;width:214px;display:flex;flex-direction:column;gap:9px;pointer-events:auto}
+#rp{position:fixed;top:68px;right:13px;width:214px;display:flex;flex-direction:column;gap:9px;pointer-events:auto}
+.pc{background:rgba(3,14,3,0.88);border:1px solid rgba(34,197,94,0.17);border-radius:12px;padding:13px;backdrop-filter:blur(14px)}
+.pt{font-size:10px;color:#86efac;letter-spacing:0.12em;text-transform:uppercase;margin-bottom:9px;font-weight:500}
+.mr{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.mn{font-size:12px;color:#a3a3a3}
+.mv{font-family:'JetBrains Mono',monospace;font-size:12px;color:#fff;font-weight:500}
+.mb{height:3px;background:rgba(255,255,255,0.07);border-radius:2px;margin-bottom:9px;overflow:hidden}
+.mf{height:100%;border-radius:2px;transition:width 1.2s ease}
+.pr{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)}
+.pr:last-child{border-bottom:none}
+.pn{font-size:12px;color:#d4d4d4}
+.ps{font-size:10px;padding:2px 8px;border-radius:999px;font-weight:500}
+.on{background:rgba(34,197,94,0.14);color:#86efac}
+.off{background:rgba(100,100,100,0.14);color:#6b7280}
+.ai{display:flex;gap:7px;align-items:flex-start;padding:7px 0;border-bottom:1px solid rgba(255,255,255,0.04)}
+.ai:last-child{border-bottom:none}
+.ad{width:6px;height:6px;border-radius:50%;margin-top:4px;flex-shrink:0}
+.at{font-size:11px;color:#a3a3a3;line-height:1.5}
+.ctabs{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:9px}
+.tbtn{font-size:10px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.11);background:transparent;color:#a3a3a3;cursor:pointer;transition:all 0.18s;font-family:'Space Grotesk',sans-serif}
+.tbtn.active{background:rgba(34,197,94,0.2);border-color:rgba(34,197,94,0.5);color:#86efac}
+.pleg{display:flex;align-items:center;gap:8px;padding:8px 9px;background:rgba(255,255,255,0.04);border-radius:8px}
+.pli{font-size:19px;flex-shrink:0}
+.pln{font-size:12px;color:#fff;font-weight:500}
+.pld{font-size:10px;color:#6b7280;margin-top:2px}
+.wr{display:flex;gap:5px}
+.wd{flex:1;text-align:center;padding:7px 3px;background:rgba(255,255,255,0.04);border-radius:7px}
+.wi{font-size:13px}
+.wt{font-size:10px;color:#fff;font-weight:500;margin-top:2px}
+.wn{font-size:9px;color:#6b7280;margin-top:1px}
+#bot{position:fixed;bottom:0;left:0;right:0;padding:13px 20px;background:linear-gradient(to top,rgba(0,0,0,0.92),transparent);display:flex;align-items:center;justify-content:space-between;pointer-events:auto}
+.nh{font-size:11px;color:#525252;display:flex;gap:13px}
+.key{background:rgba(255,255,255,0.07);padding:2px 6px;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:10px;color:#a3a3a3;border:1px solid rgba(255,255,255,0.09)}
+#flow{position:fixed;bottom:52px;left:50%;transform:translateX(-50%);background:rgba(3,14,3,0.92);border:1px solid rgba(34,197,94,0.2);border-radius:12px;padding:9px 16px;display:flex;align-items:center;gap:16px;backdrop-filter:blur(14px);white-space:nowrap}
+.fi{text-align:center}
+.fv{font-family:'JetBrains Mono',monospace;font-size:14px;color:#4ade80;font-weight:500}
+.fl{font-size:10px;color:#6b7280;margin-top:2px;text-transform:uppercase;letter-spacing:0.06em}
+.dv{width:1px;height:26px;background:rgba(255,255,255,0.07)}
+#tip{position:fixed;display:none;background:rgba(3,14,3,0.97);border:1px solid rgba(34,197,94,0.26);border-radius:10px;padding:11px 14px;font-size:12px;color:#d4d4d4;max-width:210px;pointer-events:none;backdrop-filter:blur(14px);line-height:1.65;z-index:200}
+#tip strong{color:#86efac;display:block;margin-bottom:3px;font-size:13px}
+.ft{display:flex;background:rgba(255,255,255,0.05);border-radius:8px;padding:2px;margin-bottom:9px}
+.fbtn{flex:1;font-size:10px;padding:5px;border-radius:6px;border:none;cursor:pointer;background:transparent;color:#6b7280;font-family:'Space Grotesk',sans-serif;transition:all 0.18s}
+.fbtn.active{background:rgba(34,197,94,0.19);color:#86efac;font-weight:500}
+</style>
+</head>
+<body>
+
+<a-scene renderer="antialias:true;colorManagement:true;physicallyCorrectLights:true"
+  fog="type:linear;color:#b8d4e8;near:55;far:110"
+  shadow="type:pcfsoft" vr-mode-ui="enabled:false" id="sc">
+
+  <a-sky color="#87ceeb"></a-sky>
+  <a-entity light="type:directional;color:#fff5d0;intensity:1.5;castShadow:true;shadowMapWidth:2048;shadowMapHeight:2048;shadowCameraFar:80;shadowCameraLeft:-35;shadowCameraRight:35;shadowCameraTop:35;shadowCameraBottom:-35" position="18 28 12"></a-entity>
+  <a-entity light="type:ambient;color:#cce4ff;intensity:0.45"></a-entity>
+  <a-entity light="type:hemisphere;color:#87ceeb;groundColor:#4a7a20;intensity:0.55"></a-entity>
+
+  <a-entity id="rig" position="0 3 20">
+    <a-camera look-controls="pointerLockEnabled:false" wasd-controls="acceleration:14" fov="68">
+      <a-cursor color="#22c55e" opacity="0.4" radius-inner="0.008" radius-outer="0.015"></a-cursor>
+    </a-camera>
+  </a-entity>
+
+  <!-- GROUND -->
+  <a-plane rotation="-90 0 0" width="90" height="90" material="color:#4a7c2f;roughness:1" shadow="receive:true"></a-plane>
+  <a-plane rotation="-90 0 0" position="0 0.01 -5" width="38" height="30" material="color:#5c3d1a;roughness:1" shadow="receive:true"></a-plane>
+  <!-- Soil furrow rows -->
+  <a-box position="-14 0.03 -5" width="0.55" height="0.04" depth="30" material="color:#3d2509;roughness:1"></a-box>
+  <a-box position=" -9 0.03 -5" width="0.55" height="0.04" depth="30" material="color:#3d2509;roughness:1"></a-box>
+  <a-box position=" -4 0.03 -5" width="0.55" height="0.04" depth="30" material="color:#3d2509;roughness:1"></a-box>
+  <a-box position="  1 0.03 -5" width="0.55" height="0.04" depth="30" material="color:#3d2509;roughness:1"></a-box>
+  <a-box position="  6 0.03 -5" width="0.55" height="0.04" depth="30" material="color:#3d2509;roughness:1"></a-box>
+  <a-box position=" 11 0.03 -5" width="0.55" height="0.04" depth="30" material="color:#3d2509;roughness:1"></a-box>
+  <!-- Field border -->
+  <a-box position="0 0.05 -19.8" width="38" height="0.1" depth="0.25" material="color:#8B6914"></a-box>
+  <a-box position="0 0.05  9.5"  width="38" height="0.1" depth="0.25" material="color:#8B6914"></a-box>
+  <a-box position="-19.1 0.05 -5" width="0.25" height="0.1" depth="30" material="color:#8B6914"></a-box>
+  <a-box position=" 19.1 0.05 -5" width="0.25" height="0.1" depth="30" material="color:#8B6914"></a-box>
+
+  <!-- PLANT CONTAINER (populated dynamically) -->
+  <a-entity id="plants"></a-entity>
+
+  <!-- MAIN IRRIGATION PIPE -->
+  <a-cylinder position="0 0.2 9" rotation="0 0 90" radius="0.07" height="38" material="color:#1e293b;roughness:0.4;metalness:0.7" shadow="cast:true"></a-cylinder>
+  <a-cylinder position="-14 0.14 -2" rotation="90 0 0" radius="0.04" height="22" material="color:#334155;metalness:0.6"></a-cylinder>
+  <a-cylinder position=" -9 0.14 -2" rotation="90 0 0" radius="0.04" height="22" material="color:#334155;metalness:0.6"></a-cylinder>
+  <a-cylinder position=" -4 0.14 -2" rotation="90 0 0" radius="0.04" height="22" material="color:#334155;metalness:0.6"></a-cylinder>
+  <a-cylinder position="  1 0.14 -2" rotation="90 0 0" radius="0.04" height="22" material="color:#334155;metalness:0.6"></a-cylinder>
+  <a-cylinder position="  6 0.14 -2" rotation="90 0 0" radius="0.04" height="22" material="color:#334155;metalness:0.6"></a-cylinder>
+  <a-cylinder position=" 11 0.14 -2" rotation="90 0 0" radius="0.04" height="22" material="color:#334155;metalness:0.6"></a-cylinder>
+
+  <!-- DRIP DROPS -->
+  <a-sphere radius="0.045" material="color:#60a5fa;opacity:0.88;transparent:true" position="-14 0.55 -4"  animation="property:position;from:-14 0.55 -4;to:-14 0.02 -4;dur:850;loop:true;easing:easeInQuad"></a-sphere>
+  <a-sphere radius="0.045" material="color:#60a5fa;opacity:0.88;transparent:true" position="-9  0.55 -6"  animation="property:position;from:-9 0.55 -6;to:-9 0.02 -6;dur:850;loop:true;delay:390;easing:easeInQuad"></a-sphere>
+  <a-sphere radius="0.045" material="color:#60a5fa;opacity:0.88;transparent:true" position="-4  0.55 -12" animation="property:position;from:-4 0.55 -12;to:-4 0.02 -12;dur:850;loop:true;delay:160;easing:easeInQuad"></a-sphere>
+  <a-sphere radius="0.045" material="color:#60a5fa;opacity:0.88;transparent:true" position="1   0.55 -5"  animation="property:position;from:1 0.55 -5;to:1 0.02 -5;dur:850;loop:true;delay:570;easing:easeInQuad"></a-sphere>
+  <a-sphere radius="0.045" material="color:#60a5fa;opacity:0.88;transparent:true" position="6   0.55 -10" animation="property:position;from:6 0.55 -10;to:6 0.02 -10;dur:850;loop:true;delay:310;easing:easeInQuad"></a-sphere>
+  <a-sphere radius="0.045" material="color:#60a5fa;opacity:0.88;transparent:true" position="11  0.55 -7"  animation="property:position;from:11 0.55 -7;to:11 0.02 -7;dur:850;loop:true;delay:480;easing:easeInQuad"></a-sphere>
+  <a-sphere radius="0.032" material="color:#a78bfa;opacity:0.84;transparent:true" position="-9  0.55 -14" animation="property:position;from:-9 0.55 -14;to:-9 0.02 -14;dur:1050;loop:true;delay:710;easing:easeInQuad"></a-sphere>
+
+  <!-- WATER TANK -->
+  <a-entity position="-23 0 -2" class="equip" data-name="Réservoir principal" data-desc="Capacité : 5000 L&#10;Pression : 2.1 bar&#10;Niveau : 78%">
+    <a-cylinder radius="1.4" height="3.5" material="color:#1e40af;roughness:0.3;metalness:0.5;opacity:0.82;transparent:true" position="0 1.75 0" shadow="cast:true"></a-cylinder>
+    <a-sphere radius="1.4" material="color:#1e3a8a;roughness:0.3" position="0 3.5 0" scale="1 0.38 1"></a-sphere>
+    <a-cylinder id="wlevel" radius="1.35" height="2.73" material="color:#3b82f6;opacity:0.48;transparent:true" position="0 1.36 0"></a-cylinder>
+    <a-box width="0.08" height="3.5" depth="0.06" material="color:#e2e8f0;metalness:0.5" position="1.35 1.75 0"></a-box>
+    <a-cylinder radius="0.06" height="1.4" rotation="0 0 90" material="color:#374151;metalness:0.8" position="1.45 0.6 0"></a-cylinder>
+    <a-cylinder radius="0.09" height="0.5" material="color:#374151;metalness:0.8" position="-0.9 0.25  0.9"></a-cylinder>
+    <a-cylinder radius="0.09" height="0.5" material="color:#374151;metalness:0.8" position=" 0.9 0.25  0.9"></a-cylinder>
+    <a-cylinder radius="0.09" height="0.5" material="color:#374151;metalness:0.8" position="-0.9 0.25 -0.9"></a-cylinder>
+    <a-cylinder radius="0.09" height="0.5" material="color:#374151;metalness:0.8" position=" 0.9 0.25 -0.9"></a-cylinder>
+    <a-text value="RÉSERVOIR 5000L" align="center" color="#93c5fd" width="3.5" position="0 4.3 0" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <!-- PUMP STATION -->
+  <a-entity position="-20 0 -2" class="equip" data-name="Station de pompage" data-desc="Pompe principale active&#10;Débit : 2.4 L/min&#10;Pression : 1.8 bar">
+    <a-box width="0.85" height="0.72" depth="0.55" material="color:#374151;roughness:0.4;metalness:0.7" position="0 0.36 0" shadow="cast:true"></a-box>
+    <a-cylinder radius="0.16" height="0.42" material="color:#4b5563;metalness:0.8" position="0 0.93 0"></a-cylinder>
+    <a-cylinder radius="0.22" height="0.62" rotation="0 0 90" material="color:#1f2937;metalness:0.9" position="0.65 0.4 0"></a-cylinder>
+    <a-cylinder radius="0.06" height="2.8" rotation="0 0 90" material="color:#374151;metalness:0.8" position="1.5 0.4 0"></a-cylinder>
+    <a-sphere radius="0.065" material="color:#22c55e;emissive:#22c55e;emissiveIntensity:0.9" position="0.35 0.77 0.28" animation="property:material.emissiveIntensity;from:0.9;to:0.1;dur:900;loop:true;dir:alternate"></a-sphere>
+    <a-text value="POMPE" align="center" color="#9ca3af" width="2.2" position="0 1.45 0" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <!-- FERTILIZER DOSING -->
+  <a-entity position="-23 0 3" class="equip" data-name="Doseur d'engrais" data-desc="Mode : Chimique actif&#10;N: 45% | P: 30% | K: 25%&#10;Injection : 0.3 L/h">
+    <a-cylinder id="ftank" radius="0.52" height="1.9" material="color:#7c3aed;roughness:0.4;opacity:0.9;transparent:true" position="0 0.95 0" shadow="cast:true"></a-cylinder>
+    <a-sphere radius="0.52" material="color:#6d28d9" position="0 1.9 0" scale="1 0.48 1"></a-sphere>
+    <a-cylinder radius="0.46" height="1.4" material="color:#a78bfa;opacity:0.45;transparent:true" position="0 0.7 0"></a-cylinder>
+    <a-cylinder radius="0.04" height="0.9" rotation="0 0 90" material="color:#4c1d95;metalness:0.8" position="0.65 0.55 0"></a-cylinder>
+    <a-cylinder radius="0.32" height="1.3" material="color:#065f46;roughness:0.6;opacity:0.88;transparent:true" position="1.3 0.65 0" shadow="cast:true"></a-cylinder>
+    <a-sphere radius="0.32" material="color:#064e3b" position="1.3 1.3 0" scale="1 0.4 1"></a-sphere>
+    <a-text value="ENGRAIS" align="center" color="#c4b5fd" width="3" position="0 2.5 0" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <!-- IoT SENSORS -->
+  <a-entity position="-12 0 -3" class="equip" data-name="Capteur IoT #1" data-desc="Humidité : 62%&#10;Temp : 28°C&#10;Salinité : 1.2 dS/m">
+    <a-cylinder radius="0.04" height="0.9" material="color:#374151;metalness:0.8" position="0 0.45 0"></a-cylinder>
+    <a-box width="0.2" height="0.13" depth="0.11" material="color:#0f172a;metalness:0.6" position="0 0.88 0"></a-box>
+    <a-sphere radius="0.042" material="color:#22c55e;emissive:#22c55e;emissiveIntensity:1" position="0 1.0 0" animation="property:material.emissiveIntensity;from:1;to:0.05;dur:1800;loop:true;dir:alternate"></a-sphere>
+    <a-cylinder radius="0.005" height="0.18" material="color:#9ca3af" position="0.08 1.06 0"></a-cylinder>
+    <a-text value="S1" align="center" color="#4ade80" width="1.4" position="0 1.22 0" look-at="[camera]"></a-text>
+  </a-entity>
+  <a-entity position="-2 0 -11" class="equip" data-name="Capteur IoT #2" data-desc="Humidité : 58%&#10;Temp : 29°C&#10;Salinité : 1.4 dS/m">
+    <a-cylinder radius="0.04" height="0.9" material="color:#374151;metalness:0.8" position="0 0.45 0"></a-cylinder>
+    <a-box width="0.2" height="0.13" depth="0.11" material="color:#0f172a;metalness:0.6" position="0 0.88 0"></a-box>
+    <a-sphere radius="0.042" material="color:#22c55e;emissive:#22c55e;emissiveIntensity:1" position="0 1.0 0" animation="property:material.emissiveIntensity;from:1;to:0.05;dur:2100;loop:true;dir:alternate"></a-sphere>
+    <a-cylinder radius="0.005" height="0.18" material="color:#9ca3af" position="0.08 1.06 0"></a-cylinder>
+    <a-text value="S2" align="center" color="#4ade80" width="1.4" position="0 1.22 0" look-at="[camera]"></a-text>
+  </a-entity>
+  <a-entity position="10 0 -3" class="equip" data-name="Capteur IoT #3" data-desc="Humidité : 65%&#10;Temp : 27°C&#10;Salinité : 1.0 dS/m">
+    <a-cylinder radius="0.04" height="0.9" material="color:#374151;metalness:0.8" position="0 0.45 0"></a-cylinder>
+    <a-box width="0.2" height="0.13" depth="0.11" material="color:#0f172a;metalness:0.6" position="0 0.88 0"></a-box>
+    <a-sphere radius="0.042" material="color:#f59e0b;emissive:#f59e0b;emissiveIntensity:1" position="0 1.0 0" animation="property:material.emissiveIntensity;from:1;to:0.05;dur:1600;loop:true;dir:alternate"></a-sphere>
+    <a-cylinder radius="0.005" height="0.18" material="color:#9ca3af" position="0.08 1.06 0"></a-cylinder>
+    <a-text value="S3" align="center" color="#fbbf24" width="1.4" position="0 1.22 0" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <!-- SOLAR SHELTER + EQUIPMENT -->
+  <a-entity position="22 0 -5" class="equip" data-name="Station solaire & IA" data-desc="3× panneaux 150W · Batterie 12V 100Ah&#10;Raspberry Pi 4B — IA active&#10;Régulateur MPPT · Onduleur 300W">
+    <a-cylinder radius="0.07" height="3.4" material="color:#4b5563;metalness:0.85" position="-1.15 1.7  1.05"></a-cylinder>
+    <a-cylinder radius="0.07" height="3.4" material="color:#4b5563;metalness:0.85" position=" 1.15 1.7  1.05"></a-cylinder>
+    <a-cylinder radius="0.07" height="3.4" material="color:#4b5563;metalness:0.85" position="-1.15 1.7 -1.05"></a-cylinder>
+    <a-cylinder radius="0.07" height="3.4" material="color:#4b5563;metalness:0.85" position=" 1.15 1.7 -1.05"></a-cylinder>
+    <a-box width="2.42" height="0.07" depth="0.07" material="color:#374151;metalness:0.75" position="0 3.4  1.05"></a-box>
+    <a-box width="2.42" height="0.07" depth="0.07" material="color:#374151;metalness:0.75" position="0 3.4 -1.05"></a-box>
+    <a-box width="0.07" height="0.07" depth="2.18" material="color:#374151;metalness:0.75" position="-1.15 3.4 0"></a-box>
+    <a-box width="0.07" height="0.07" depth="2.18" material="color:#374151;metalness:0.75" position=" 1.15 3.4 0"></a-box>
+    <!-- Metal roof -->
+    <a-box width="2.5" height="0.06" depth="2.3" material="color:#6b7280;roughness:0.5;metalness:0.6" position="0 3.46 0" rotation="-5 0 0"></a-box>
+    <a-box width="2.5" height="0.05" depth="0.5" material="color:#4b5563;roughness:0.5;metalness:0.6" position="0 3.38 1.5" rotation="-15 0 0"></a-box>
+    <!-- 3 Solar panels -->
+    <a-box width="0.7" height="0.055" depth="1.05" material="color:#1e3a8a;roughness:0.12;metalness:0.6;emissive:#1e3a8a;emissiveIntensity:0.14" position="-0.74 3.55 -0.1" rotation="-18 0 0"></a-box>
+    <a-box width="0.7" height="0.055" depth="1.05" material="color:#1e3a8a;roughness:0.12;metalness:0.6;emissive:#1e3a8a;emissiveIntensity:0.14" position="0    3.55 -0.1" rotation="-18 0 0"></a-box>
+    <a-box width="0.7" height="0.055" depth="1.05" material="color:#1e3a8a;roughness:0.12;metalness:0.6;emissive:#1e3a8a;emissiveIntensity:0.14" position=" 0.74 3.55 -0.1" rotation="-18 0 0"></a-box>
+    <!-- Grid lines on panels -->
+    <a-box width="2.3" height="0.06" depth="0.012" material="color:#2563eb;metalness:0.7" position="0 3.59  0.2" rotation="-18 0 0"></a-box>
+    <a-box width="2.3" height="0.06" depth="0.012" material="color:#2563eb;metalness:0.7" position="0 3.59 -0.35" rotation="-18 0 0"></a-box>
+    <a-box width="0.012" height="0.06" depth="1.1" material="color:#2563eb;metalness:0.7" position="-0.37 3.59 -0.1" rotation="-18 0 0"></a-box>
+    <a-box width="0.012" height="0.06" depth="1.1" material="color:#2563eb;metalness:0.7" position=" 0.37 3.59 -0.1" rotation="-18 0 0"></a-box>
+    <!-- Workbench -->
+    <a-box width="2.1" height="0.06" depth="0.65" material="color:#292524;roughness:0.85" position="0 1.02 0"></a-box>
+    <a-box width="0.05" height="1.02" depth="0.05" material="color:#44403c" position="-0.94 0.51  0.29"></a-box>
+    <a-box width="0.05" height="1.02" depth="0.05" material="color:#44403c" position=" 0.94 0.51  0.29"></a-box>
+    <a-box width="0.05" height="1.02" depth="0.05" material="color:#44403c" position="-0.94 0.51 -0.29"></a-box>
+    <a-box width="0.05" height="1.02" depth="0.05" material="color:#44403c" position=" 0.94 0.51 -0.29"></a-box>
+    <!-- Raspberry Pi -->
+    <a-box width="0.24" height="0.045" depth="0.16" material="color:#0f172a;metalness:0.5" position="-0.58 1.09 0"></a-box>
+    <a-plane width="0.18" height="0.11" material="color:#0ea5e9;emissive:#0ea5e9;emissiveIntensity:0.38" position="-0.58 1.11 -0.08" rotation="-90 0 0"></a-plane>
+    <a-sphere radius="0.018" material="color:#22c55e;emissive:#22c55e;emissiveIntensity:1" position="-0.48 1.13 0.06" animation="property:material.emissiveIntensity;from:1;to:0;dur:700;loop:true;dir:alternate"></a-sphere>
+    <!-- Battery -->
+    <a-box width="0.38" height="0.24" depth="0.24" material="color:#1c1917;roughness:0.6;metalness:0.3" position="0.15 1.18 0"></a-box>
+    <a-cylinder radius="0.026" height="0.04" material="color:#dc2626;metalness:0.9" position="0.04 1.32 0.05"></a-cylinder>
+    <a-cylinder radius="0.026" height="0.04" material="color:#1c1917;metalness:0.9" position="0.18 1.32 0.05"></a-cylinder>
+    <!-- MPPT -->
+    <a-box width="0.17" height="0.3" depth="0.09" material="color:#0c1445;metalness:0.55" position="0.65 1.2 0"></a-box>
+    <a-sphere radius="0.016" material="color:#22c55e;emissive:#22c55e;emissiveIntensity:1" position="0.72 1.32 -0.044" animation="property:material.emissiveIntensity;from:1;to:0.1;dur:1400;loop:true;dir:alternate"></a-sphere>
+    <!-- WiFi antenna -->
+    <a-cylinder radius="0.012" height="0.5" material="color:#9ca3af;metalness:0.8" position="-0.58 1.6 0"></a-cylinder>
+    <a-sphere radius="0.028" material="color:#e5e7eb;metalness:0.7" position="-0.58 1.86 0"></a-sphere>
+    <a-text value="STATION IA ☀" align="center" color="#818cf8" width="3.2" position="0 4.0 0" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <!-- WEATHER STATION -->
+  <a-entity position="20 0 7" class="equip" data-name="Station météo" data-desc="Temp air : 32°C&#10;Humidité : 68%&#10;Vent : 12 km/h&#10;Rayonnement : 87%">
+    <a-cylinder radius="0.055" height="3.8" material="color:#6b7280;metalness:0.8" position="0 1.9 0"></a-cylinder>
+    <a-entity position="0 3.75 0" animation="property:rotation;to:0 360 0;dur:1800;loop:true;easing:linear">
+      <a-cylinder radius="0.22" height="0.055" material="color:#d1d5db;metalness:0.5" position="0 0 0"></a-cylinder>
+      <a-sphere radius="0.055" material="color:#e5e7eb;metalness:0.6" position="0.22 0 0"></a-sphere>
+      <a-sphere radius="0.055" material="color:#e5e7eb;metalness:0.6" position="-0.22 0 0"></a-sphere>
+      <a-sphere radius="0.055" material="color:#e5e7eb;metalness:0.6" position="0 0 0.22"></a-sphere>
+    </a-entity>
+    <a-box width="0.28" height="0.025" depth="0.04" material="color:#9ca3af;metalness:0.7" position="0 3.44 0" animation="property:rotation;from:0 0 0;to:0 320 0;dur:6000;loop:true;dir:alternate;easing:easeInOutSine"></a-box>
+    <a-box width="0.28" height="0.2" depth="0.18" material="color:#f9fafb;roughness:0.3" position="0 2.4 0"></a-box>
+    <a-text value="MÉTÉO" align="center" color="#93c5fd" width="2" position="0 4.2 0" look-at="[camera]"></a-text>
+  </a-entity>
+
+  <!-- BORDER TREES -->
+  <a-entity position="-25 0 -15"><a-cylinder radius="0.22" height="3"   material="color:#5c3d1a;roughness:1" position="0 1.5  0"></a-cylinder><a-sphere radius="1.6" material="color:#166534;roughness:1" position="0 4.2 0"></a-sphere></a-entity>
+  <a-entity position="-25 0 -5"> <a-cylinder radius="0.18" height="2.6" material="color:#5c3d1a;roughness:1" position="0 1.3  0"></a-cylinder><a-sphere radius="1.4" material="color:#15803d;roughness:1" position="0 3.5 0"></a-sphere></a-entity>
+  <a-entity position="-25 0  6"> <a-cylinder radius="0.24" height="3.4" material="color:#5c3d1a;roughness:1" position="0 1.7  0"></a-cylinder><a-sphere radius="1.8" material="color:#14532d;roughness:1" position="0 5.0 0"></a-sphere></a-entity>
+  <a-entity position=" 26 0 -15"><a-cylinder radius="0.2"  height="3"   material="color:#5c3d1a;roughness:1" position="0 1.5  0"></a-cylinder><a-sphere radius="1.5" material="color:#166534;roughness:1" position="0 4.1 0"></a-sphere></a-entity>
+  <a-entity position=" 26 0  2"> <a-cylinder radius="0.2"  height="2.9" material="color:#5c3d1a;roughness:1" position="0 1.45 0"></a-cylinder><a-sphere radius="1.7" material="color:#15803d;roughness:1" position="0 4.5 0"></a-sphere></a-entity>
+
+  <!-- PATHS -->
+  <a-box position="-21.5 0.03 -5" width="3.2" height="0.06" depth="30" material="color:#92400e;roughness:1"></a-box>
+  <a-box position=" 20.5 0.03 -5" width="2.2" height="0.06" depth="30" material="color:#78350f;roughness:1"></a-box>
+
+  <!-- CLOUDS -->
+  <a-entity animation="property:position;from:-12 22 -32;to:14 22 -32;dur:42000;loop:true;dir:alternate">
+    <a-sphere radius="3.2" material="color:#fff;opacity:0.82;transparent:true" position="0 0 0"></a-sphere>
+    <a-sphere radius="2.6" material="color:#fff;opacity:0.82;transparent:true" position="3.2 0.4 0"></a-sphere>
+    <a-sphere radius="2"   material="color:#fff;opacity:0.82;transparent:true" position="-2.5 0.2 0"></a-sphere>
+  </a-entity>
+  <a-entity animation="property:position;from:6 26 -38;to:-16 26 -38;dur:58000;loop:true;dir:alternate">
+    <a-sphere radius="2.6" material="color:#fff;opacity:0.78;transparent:true" position="0 0 0"></a-sphere>
+    <a-sphere radius="2.1" material="color:#fff;opacity:0.78;transparent:true" position="2.6 0.3 0"></a-sphere>
+  </a-entity>
+
+  <!-- BIRDS -->
+  <a-entity animation="property:position;from:-6 19 -22;to:16 19 -22;dur:13000;loop:true;dir:alternate;easing:easeInOutSine">
+    <a-box width="0.32" height="0.04" depth="0.12" material="color:#1f2937" rotation="0 0 12"></a-box>
+    <a-box width="0.32" height="0.04" depth="0.12" material="color:#1f2937" position="0.32 0 0" rotation="0 0 -12"></a-box>
+  </a-entity>
+
+</a-scene>
+
+<!-- ====================== HTML UI ====================== -->
+<div id="ui">
+  <div id="hdr">
+    <div class="logo">
+      <div class="li"><svg width="18" height="18" viewBox="0 0 20 20" fill="none"><path d="M10 2C10 2 4 7 4 12a6 6 0 0012 0C16 7 10 2 10 2z" fill="white"/><path d="M10 8v5M7.5 11l2.5-3 2.5 3" stroke="#22c55e" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <div><div class="lt">AgroSmart 3D</div><div class="ls">Simulation temps réel</div></div>
+    </div>
+    <div class="lbdg"><div class="ldot"></div><span class="ltxt">LIVE</span></div>
+  </div>
+
+  <div id="lp">
+    <div class="pc">
+      <div class="pt">Culture active</div>
+      <div class="ctabs">
+        <button class="tbtn active" onclick="switchCulture('Maïs',this)">🌽 Maïs</button>
+        <button class="tbtn" onclick="switchCulture('Tomates',this)">🍅 Tomates</button>
+        <button class="tbtn" onclick="switchCulture('Riz',this)">🌾 Riz</button>
+        <button class="tbtn" onclick="switchCulture('Mangues',this)">🥭 Mangues</button>
+        <button class="tbtn" onclick="switchCulture('Piments',this)">🌶️ Piments</button>
+      </div>
+      <div class="pleg" id="pleg">
+        <div class="pli">🌽</div>
+        <div><div class="pln">Maïs (Zea mays)</div><div class="pld">Tige ~2m · Grandes feuilles strap · Épi + panache</div></div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="pt">Capteurs IoT</div>
+      <div class="mr"><span class="mn">Humidité sol</span><span class="mv" id="m-hum">62%</span></div>
+      <div class="mb"><div class="mf" id="b-hum" style="width:62%;background:#3b82f6"></div></div>
+      <div class="mr"><span class="mn">Température</span><span class="mv" id="m-temp">28°C</span></div>
+      <div class="mb"><div class="mf" id="b-temp" style="width:70%;background:#f59e0b"></div></div>
+      <div class="mr"><span class="mn">Salinité</span><span class="mv" id="m-sal">1.2 dS/m</span></div>
+      <div class="mb"><div class="mf" id="b-sal" style="width:30%;background:#22c55e"></div></div>
+      <div class="mr"><span class="mn">Luminosité</span><span class="mv" id="m-lux">87%</span></div>
+      <div class="mb"><div class="mf" id="b-lux" style="width:87%;background:#f59e0b"></div></div>
+    </div>
+
+    <div class="pc">
+      <div class="pt">Fertilisation</div>
+      <div class="ft">
+        <button class="fbtn active" id="fc" onclick="setFertil('chimique')">Chimique</button>
+        <button class="fbtn" id="fbc" onclick="setFertil('bio')">Bio-compost</button>
+      </div>
+      <div class="mr"><span class="mn" id="fn1">Azote (N)</span><span class="mv">45%</span></div>
+      <div class="mb"><div class="mf" style="width:45%;background:#a78bfa"></div></div>
+      <div class="mr"><span class="mn" id="fn2">Phosphore</span><span class="mv">30%</span></div>
+      <div class="mb"><div class="mf" style="width:30%;background:#c4b5fd"></div></div>
+      <div class="mr"><span class="mn" id="fn3">Potassium</span><span class="mv">25%</span></div>
+      <div class="mb"><div class="mf" style="width:25%;background:#ddd6fe"></div></div>
+    </div>
+  </div>
+
+  <div id="rp">
+    <div class="pc">
+      <div class="pt">Météo 4 jours</div>
+      <div class="wr">
+        <div class="wd"><div class="wi">☀️</div><div class="wt">32°</div><div class="wn">Auj.</div></div>
+        <div class="wd"><div class="wi">⛅</div><div class="wt">29°</div><div class="wn">Dem.</div></div>
+        <div class="wd"><div class="wi">🌧️</div><div class="wt">26°</div><div class="wn">J+2</div></div>
+        <div class="wd"><div class="wi">☀️</div><div class="wt">31°</div><div class="wn">J+3</div></div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="pt">Équipements</div>
+      <div class="pr"><span class="pn">Pompe principale</span><span class="ps on">ON</span></div>
+      <div class="pr"><span class="pn">Doseur engrais</span><span class="ps on">ON</span></div>
+      <div class="pr"><span class="pn">Goutte-à-goutte Z1</span><span class="ps on">ON</span></div>
+      <div class="pr"><span class="pn">Goutte-à-goutte Z2</span><span class="ps off">OFF</span></div>
+      <div class="pr"><span class="pn">Panneaux solaires</span><span class="ps on" id="solar-st">87W</span></div>
+      <div class="pr"><span class="pn">Batterie 12V</span><span class="ps on" id="bat-st">92%</span></div>
+    </div>
+
+    <div class="pc">
+      <div class="pt">Alertes IA</div>
+      <div id="alerts">
+        <div class="ai"><div class="ad" style="background:#f59e0b"></div><div class="at">Pluie demain — irrigation -40%</div></div>
+        <div class="ai"><div class="ad" style="background:#22c55e"></div><div class="at">Humidité optimale détectée</div></div>
+        <div class="ai"><div class="ad" style="background:#3b82f6"></div><div class="at">Fertilisation dans 2h</div></div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="pt">Rendement</div>
+      <div class="mr"><span class="mn">Eau économisée</span><span class="mv" style="color:#4ade80" id="m-eco">34%</span></div>
+      <div class="mb"><div class="mf" id="b-eco" style="width:34%;background:#22c55e"></div></div>
+      <div class="mr"><span class="mn">Engrais économisé</span><span class="mv" style="color:#a78bfa">28%</span></div>
+      <div class="mb"><div class="mf" style="width:28%;background:#7c3aed"></div></div>
+      <div class="mr"><span class="mn">Rendement +</span><span class="mv" style="color:#fbbf24">+22%</span></div>
+      <div class="mb"><div class="mf" style="width:22%;background:#f59e0b"></div></div>
+    </div>
+  </div>
+
+  <div id="flow">
+    <div class="fi"><div class="fv" id="fw-flow">2.4 L/min</div><div class="fl">Débit</div></div>
+    <div class="dv"></div>
+    <div class="fi"><div class="fv" id="fw-vol">148 L</div><div class="fl">Vol/jour</div></div>
+    <div class="dv"></div>
+    <div class="fi"><div class="fv" id="fw-next">18h30</div><div class="fl">Proch. irrig.</div></div>
+    <div class="dv"></div>
+    <div class="fi"><div class="fv" id="fw-tank">78%</div><div class="fl">Réservoir</div></div>
+    <div class="dv"></div>
+    <div class="fi"><div class="fv" id="fw-time" style="color:#86efac">00:00:00</div><div class="fl">Heure sim.</div></div>
+  </div>
+
+  <div id="bot">
+    <div class="nh">
+      <span><span class="key">ZQSD</span>Déplacer</span>
+      <span><span class="key">Souris</span>Regarder</span>
+      <span><span class="key">Clic</span>Inspecter</span>
+    </div>
+    <div style="font-size:11px;color:#86efac;font-family:'JetBrains Mono',monospace">Simulation active · Saison sèche</div>
+  </div>
+
+  <div id="tip"></div>
+</div>
+
+<script>
+/* ===================== CULTURE DEFINITIONS ===================== */
+const CULTURES = {
+  'Maïs': {
+    emoji:'🌽', lat:'Zea mays',
+    desc:'Tige ~2m · Grandes feuilles strap · Épi doré + panache',
+    component:'maize-plant',
+    // 6 rows × 8 cols
+    rows:[-14,-9,-4,1,6,11], cols:[-2,-4,-6,-8,-10,-12,-14,-16],
+    hum:62, temp:28, sal:1.2, eco:34, lux:87,
+    flow:'2.4', vol:148, next:'18h30', tank:78,
+    alerts:[['#f59e0b','Pluie demain — irrigation -40%'],['#22c55e','Humidité optimale détectée'],['#3b82f6','Fertilisation dans 2h']]
+  },
+  'Tomates': {
+    emoji:'🍅', lat:'Solanum lycopersicum',
+    desc:'Tiges ramifiées · Feuilles composées · Fruits en grappes',
+    component:'tomato-plant',
+    rows:[-14,-9,-4,1,6,11], cols:[-2,-5,-8,-11,-14,-17],
+    hum:72, temp:30, sal:0.9, eco:41, lux:92,
+    flow:'3.1', vol:192, next:'17h00', tank:72,
+    alerts:[['#f59e0b','Température élevée — arrosage soir'],['#22c55e','Sol bien drainé'],['#3b82f6','Apport potassium sous 24h']]
+  },
+  'Riz': {
+    emoji:'🌾', lat:'Oryza sativa',
+    desc:'Talles fines · Épillet nodant · Rizière inondée',
+    component:'rice-plant',
+    // Denser grid
+    rows:[-13,-9,-5,-1,3,7,11], cols:[-2,-5,-8,-11,-14,-17],
+    hum:88, temp:26, sal:0.5, eco:18, lux:75,
+    flow:'5.2', vol:320, next:'19h00', tank:85,
+    alerts:[['#3b82f6','Niveau eau rizière stable'],['#22c55e','Tallage en cours — optimal'],['#f59e0b','Vérifier drainage J+2']]
+  },
+  'Mangues': {
+    emoji:'🥭', lat:'Mangifera indica',
+    desc:'Arbre ~3m · Feuilles lancéolées · Nouvelles pousses oranges',
+    component:'mango-tree',
+    // Sparser grid for big trees
+    rows:[-14,-4,6], cols:[-3,-10,-17],
+    hum:45, temp:32, sal:1.8, eco:52, lux:95,
+    flow:'1.1', vol:68, next:'20h00', tank:65,
+    alerts:[['#f59e0b','Floraison — stress hydrique contrôlé'],['#22c55e','Croissance stable'],['#3b82f6','Irrigation nocturne conseillée']]
+  },
+  'Piments': {
+    emoji:'🌶️', lat:'Capsicum annuum',
+    desc:'Arbuste dense · Ramification en Y · Fruits pendant multicolores',
+    component:'pepper-plant',
+    rows:[-14,-9,-4,1,6,11], cols:[-2,-5,-8,-11,-14,-17],
+    hum:55, temp:29, sal:1.1, eco:38, lux:88,
+    flow:'1.8', vol:112, next:'16h30', tank:80,
+    alerts:[['#f59e0b','Sol légèrement sec — 1h'],['#22c55e','Bonne aération racinaire'],['#3b82f6','Azote suppl. recommandé']]
+  }
+};
+
+let currentCulture = 'Maïs';
+
+/* ===================== PLANT MANAGER ===================== */
+function clearPlants() {
+  const c = document.getElementById('plants');
+  while (c.firstChild) c.removeChild(c.firstChild);
+}
+
+function generatePlants(cultureName) {
+  clearPlants();
+  const def = CULTURES[cultureName];
+  const container = document.getElementById('plants');
+  let seed = 0;
+  def.rows.forEach(x => {
+    def.cols.forEach(z => {
+      const el = document.createElement('a-entity');
+      el.setAttribute('position', `${x} 0 ${z}`);
+      el.setAttribute(def.component, `seed: ${seed++}`);
+      container.appendChild(el);
+    });
+  });
+}
+
+function switchCulture(name, btn) {
+  currentCulture = name;
+  document.querySelectorAll('.tbtn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const d = CULTURES[name];
+  // Update legend
+  document.getElementById('pleg').innerHTML =
+    `<div class="pli">${d.emoji}</div><div><div class="pln">${name} (${d.lat})</div><div class="pld">${d.desc}</div></div>`;
+  // Update metrics
+  document.getElementById('m-hum').textContent = d.hum + '%';
+  document.getElementById('b-hum').style.width = d.hum + '%';
+  document.getElementById('m-temp').textContent = d.temp + '°C';
+  document.getElementById('b-temp').style.width = Math.round(d.temp / 40 * 100) + '%';
+  document.getElementById('m-sal').textContent = d.sal + ' dS/m';
+  document.getElementById('b-sal').style.width = Math.round(d.sal / 4 * 100) + '%';
+  document.getElementById('m-lux').textContent = d.lux + '%';
+  document.getElementById('b-lux').style.width = d.lux + '%';
+  document.getElementById('m-eco').textContent = d.eco + '%';
+  document.getElementById('b-eco').style.width = d.eco + '%';
+  document.getElementById('fw-flow').textContent = d.flow + ' L/min';
+  document.getElementById('fw-vol').textContent = d.vol + ' L';
+  document.getElementById('fw-next').textContent = d.next;
+  document.getElementById('fw-tank').textContent = d.tank + '%';
+  // Alerts
+  document.getElementById('alerts').innerHTML = d.alerts.map(a =>
+    `<div class="ai"><div class="ad" style="background:${a[0]}"></div><div class="at">${a[1]}</div></div>`
+  ).join('');
+  // Regenerate plants
+  generatePlants(name);
+}
+
+/* ===================== FERTILIZER ===================== */
+function setFertil(mode) {
+  const isC = mode === 'chimique';
+  document.getElementById('fc').classList.toggle('active', isC);
+  document.getElementById('fbc').classList.toggle('active', !isC);
+  document.getElementById('fn1').textContent = isC ? 'Azote (N)' : 'Extrait compost';
+  document.getElementById('fn2').textContent = isC ? 'Phosphore' : 'Humates';
+  document.getElementById('fn3').textContent = isC ? 'Potassium' : 'Micro-org.';
+  const ft = document.getElementById('ftank');
+  if (ft) ft.setAttribute('material', isC
+    ? 'color:#7c3aed;roughness:0.4;opacity:0.9;transparent:true'
+    : 'color:#065f46;roughness:0.4;opacity:0.9;transparent:true');
+}
+
+/* ===================== LIVE SIMULATION ===================== */
+let simSec = 0, waterUsed = 0;
+setInterval(() => {
+  simSec++;
+  document.getElementById('fw-time').textContent =
+    [Math.floor(simSec / 3600) % 24, Math.floor(simSec / 60) % 60, simSec % 60]
+    .map(n => String(n).padStart(2, '0')).join(':');
+  if (simSec % 4 === 0) {
+    const d = CULTURES[currentCulture];
+    document.getElementById('m-hum').textContent =
+      Math.min(100, Math.max(0, d.hum + Math.round((Math.random() - 0.5) * 5))) + '%';
+    document.getElementById('m-temp').textContent =
+      (d.temp + Math.round((Math.random() - 0.5) * 2)) + '°C';
+    waterUsed += parseFloat(d.flow) / 60;
+    document.getElementById('fw-tank').textContent =
+      Math.max(20, Math.round(d.tank - waterUsed / 80)) + '%';
+    document.getElementById('solar-st').textContent = Math.round(78 + Math.random() * 44) + 'W';
+    document.getElementById('bat-st').textContent = Math.max(60, Math.round(92 - simSec / 300)) + '%';
+  }
+}, 1000);
+
+/* ===================== TOOLTIP ===================== */
+const tip = document.getElementById('tip');
+document.addEventListener('mousemove', e => {
+  tip.style.left = (e.clientX + 16) + 'px';
+  tip.style.top = (e.clientY + 16) + 'px';
+});
+document.querySelector('a-scene').addEventListener('click', e => {
+  let el = e.detail && e.detail.intersection && e.detail.intersection.object && e.detail.intersection.object.el;
+  let found = null;
+  while (el && el.tagName !== 'A-SCENE') {
+    if (el.dataset && el.dataset.name) { found = el; break; }
+    el = el.parentElement;
+  }
+  if (found) {
+    tip.innerHTML = `<strong>${found.dataset.name}</strong>${found.dataset.desc.replace(/&#10;/g, '<br>')}`;
+    tip.style.display = 'block';
+    clearTimeout(tip._t);
+    tip._t = setTimeout(() => tip.style.display = 'none', 4000);
+  }
+});
+
+/* ===================== INIT ===================== */
+document.querySelector('a-scene').addEventListener('loaded', () => {
+  generatePlants('Maïs');
+});
+</script>
+</body>
+</html>
